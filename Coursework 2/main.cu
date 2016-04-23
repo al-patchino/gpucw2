@@ -16,6 +16,7 @@
 #include <cuda_runtime.h>
 
 #include "matrix_kernel_1.h"
+#include "matrix_kernel_2.h"
 
 
 
@@ -52,8 +53,13 @@ int main() {
 	int *temp;
 	int m = 0;
 
-	int height = 201;
-	int width = 202;
+	// -- Max matrix for kernel 1 = 791x792
+	// -- Max matrix for kernel 2 = 98x99
+
+	int height = 791;
+	int width = height + 1;
+
+
 
 	int kernelID = 1;
 
@@ -69,8 +75,6 @@ int main() {
 	// -- Print host matrix
 	printf("hostInput:\n");
 	//printMatrix(height, width, hostInput);
-
-
 
 
 	// -- Start Timer
@@ -114,8 +118,8 @@ int main() {
 	printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
 
 
-	printf("CPU checksum: %.10f\n", checkSum(hostInput, height, width));
-	printf("GPU checksum: %.10f\n", checkSum(h_Matrix, height, width));
+	printf("CPU checksum: %f\n", checkSum(hostInput, height, width));
+	printf("GPU checksum: %f\n", checkSum(h_Matrix, height, width));
 
 	// -- Free memory
 
@@ -162,10 +166,10 @@ void generateRandomMatrix(int height, int width) {
 	// Generates a random matrix of floats
 	//srand((unsigned int)time(NULL));
 	for (int i = 0; i < (height * width); i++) {
-		float value = (float)rand() / (float)(RAND_MAX/9);
+		float value = (float)rand() / (float)(RAND_MAX/90);
 		hostInput[i] = value;
 	}
-	hostInput[0] = 9.99;
+	hostInput[0] = 90.99;
 
 }
 
@@ -200,8 +204,10 @@ void solveOnHost(int height, int width, float* hostInput){
 					- (coeff * hostInput[pivotPos + offset_col]);
 			}
 			//printMatrix(height, width, hostInput);			
-		}
+		}	
 	}
+
+	//return;
 
 	// -- Go through all rows starting from second
 	for (int row_ID = 1; row_ID < height; row_ID++){
@@ -225,6 +231,8 @@ void solveOnHost(int height, int width, float* hostInput){
 			// -- Print matrix
 			//printMatrix(height, width);
 		}
+
+		//if (row_ID == 3) return;
 	}
 
 }
@@ -237,7 +245,7 @@ void printMatrix(int height, int width, float* mat) {
 
 		for (int k = 0; k < width; ++k){
 
-			printf("[%.4f] ", mat[i * width + k]);
+			printf("[%.2f] ", mat[i * width + k]);
 		}
 		printf("\n");
 	}
@@ -322,11 +330,9 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 		exit(EXIT_FAILURE);
 	}
 
-	if (kernelID == 1){
-
-		M1_Controller(d_Matrix, h_Matrix, height, width);
-
-	}	
+	if (kernelID == 1)	M1_Controller(d_Matrix, h_Matrix, height, width);
+	if (kernelID == 2)	M2_Controller(d_Matrix, h_Matrix, height, width);
+	
 
 	// -- Copy device matrix to host matrix
 	err = cudaMemcpy(h_Matrix, d_Matrix, height * width * sizeof(float), cudaMemcpyDeviceToHost);
@@ -336,6 +342,7 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 		fprintf(stderr, "Failed to copy from device to host (error code %s)!\n", cudaGetErrorString(err));
 		exit(EXIT_FAILURE);
 	}
+
 }
 
 float checkSum(float* mat, int height, int width){
