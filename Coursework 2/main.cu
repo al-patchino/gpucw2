@@ -17,6 +17,8 @@
 
 #include "matrix_kernel_1.h"
 #include "matrix_kernel_2.h"
+#include "matrix_kernel_3.h"
+#include "matrix_kernel_4.h"
 
 
 
@@ -25,6 +27,7 @@
 // -- General purpose functions
 void writeToFile();
 int* readFromFile(int *input);
+void printProperties();
 void generateRandomMatrix(int height, int width);
 void printMatrix(int height, int width, float* mat);
 void swapRows(int row1, int row2, int height, int width);
@@ -44,9 +47,17 @@ int numOfOutputElements = 0;
 
 int choice = NULL;
 
-struct timeval t1, t2;
+
 
 int main() {
+
+	int kernelID = 3;
+
+	
+
+	printProperties();
+
+	printf("Starting kernel #%d\n", kernelID);
 
 	cudaError_t err = cudaSuccess;
 
@@ -54,14 +65,12 @@ int main() {
 	int m = 0;
 
 	// -- Max matrix for kernel 1 = 791x792
-	// -- Max matrix for kernel 2 = 98x99
+	// -- Max matrix for kernel 2 = 97x98
+	// -- Max matrix for kernel 3 = 211x212
 
-	int height = 791;
+	int height = 200;
 	int width = height + 1;
 
-
-
-	int kernelID = 1;
 
 	// -- Allocate space on the host
 	hostInput = (float*)malloc(sizeof(float) * height * width);
@@ -122,7 +131,6 @@ int main() {
 	printf("GPU checksum: %f\n", checkSum(h_Matrix, height, width));
 
 	// -- Free memory
-
 	cudaFree(d_Matrix);
 
 	free(h_Matrix);
@@ -177,9 +185,6 @@ void solveOnHost(int height, int width, float* hostInput){
 
 	float pivot = 0;
 	
-	// -- Print matrix
-	//printMatrix(height, width);
-	
 	// -- Go through all rows
 	for (int row_ID = 0; row_ID < height; row_ID++){
 
@@ -202,12 +207,9 @@ void solveOnHost(int height, int width, float* hostInput){
 				// -- Update elements in row by subtracting elements with coeff
 				hostInput[pivotPos + (width * row2_ID) + offset_col] = hostInput[pivotPos + (width * row2_ID) + offset_col]
 					- (coeff * hostInput[pivotPos + offset_col]);
-			}
-			//printMatrix(height, width, hostInput);			
+			}		
 		}	
 	}
-
-	//return;
 
 	// -- Go through all rows starting from second
 	for (int row_ID = 1; row_ID < height; row_ID++){
@@ -227,12 +229,7 @@ void solveOnHost(int height, int width, float* hostInput){
 				hostInput[pivotPos - (width * row2_ID) + offset_col] = hostInput[pivotPos - (width * row2_ID) + offset_col]
 					- (coeff * hostInput[pivotPos + offset_col]);
 			}
-
-			// -- Print matrix
-			//printMatrix(height, width);
 		}
-
-		//if (row_ID == 3) return;
 	}
 
 }
@@ -251,6 +248,47 @@ void printMatrix(int height, int width, float* mat) {
 	}
 	printf("\n\n");
 
+}
+
+void printProperties() {
+
+	int gpuNumber, gpuID;
+	cudaError_t errorCode;
+	struct cudaDeviceProp gpuProp;
+
+
+	errorCode = cudaGetDeviceCount(&gpuNumber);
+
+	if (errorCode) printf("Error in cudaDeviceCount\n");
+
+	printf("Number of the available CUDA devices: %d\n", gpuNumber);
+
+	for (gpuID = 0; gpuID < gpuNumber; gpuID++) {
+
+		errorCode = cudaGetDeviceProperties(&gpuProp, gpuID);
+
+		printf("\nDevice ID: %d\n", gpuID);
+		printf("Name of the   GPU:                      %s\n", gpuProp.name);
+		printf("Compute Capability:                  %d.%d\n", gpuProp.major, gpuProp.minor);
+		printf("Global Memory                      %.2f Gb\n", (float)gpuProp.totalGlobalMem / 1024.0 / 1024.0 / 1024.0);
+		printf("Shared Memory per Block:           %.2f Kb\n", (float)gpuProp.sharedMemPerBlock / 1024.0);
+		printf("Constant Memory                    %.2f Kb\n", (float)gpuProp.totalConstMem / 1024.0);
+		printf("Maximum Number of Threads per Block:    %d\n", gpuProp.maxThreadsPerBlock);
+		printf("Number of Registers per block   :       %d\n", gpuProp.regsPerBlock);
+		printf("Support Concurrent Exec.    of Kernels? %d\n", gpuProp.concurrentKernels);
+
+		// Additional information
+		printf("Clock frequency in kilohertz:						%d kHz\n", gpuProp.clockRate);
+		printf("Specified whether there is a run time limit on kernels: %d\n", gpuProp.kernelExecTimeoutEnabled);
+		printf("Size of L2 cache in bytes:						  %d bytes\n", gpuProp.l2CacheSize);
+		printf("Maximum size of each dimension of a grid:				%d\n", gpuProp.maxGridSize);
+		printf("Global memory bus width in bits:					    %d\n", gpuProp.memoryBusWidth);
+		printf("Peak memory clock frequency in kilohertz:			%d kHz\n", gpuProp.memoryClockRate);
+		printf("Warp size in threads:									%d\n", gpuProp.warpSize);
+
+		printf("Device overlap:											%d\n", gpuProp.deviceOverlap);
+
+	}
 }
 
 void swapRows(int row1, int row2, int height, int width){
@@ -330,8 +368,11 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 		exit(EXIT_FAILURE);
 	}
 
+	// -- Which kernel to run depending on user input
 	if (kernelID == 1)	M1_Controller(d_Matrix, h_Matrix, height, width);
 	if (kernelID == 2)	M2_Controller(d_Matrix, h_Matrix, height, width);
+	if (kernelID == 3)	M3_Controller(d_Matrix, h_Matrix, height, width);
+	if (kernelID == 4)	M4_Controller(d_Matrix, h_Matrix, height, width);
 	
 
 	// -- Copy device matrix to host matrix
