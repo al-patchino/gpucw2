@@ -50,6 +50,8 @@ void M3_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 
 		// -- Wait for kernel to finish eliminating rows
 		cudaDeviceSynchronize();
+
+		return;
 	}
 	
 	// -- Go through all rows starting from second

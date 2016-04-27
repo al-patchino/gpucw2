@@ -20,168 +20,171 @@
 #include "matrix_kernel_3.h"
 #include "matrix_kernel_4.h"
 
-
-
 #define HANDLE_ERROR handleError();
 
 // -- General purpose functions
-void writeToFile();
-int* readFromFile(int *input);
 void printProperties();
-void generateRandomMatrix(int height, int width);
+void generateRandomMatrix(int height, int width, float* mat);
 void printMatrix(int height, int width, float* mat);
 void swapRows(int row1, int row2, int height, int width);
-void solveOnHost(int height, int width, float* hostInput);
+void solveOnHost(int height, int width, float* mat);
 void handleError();
 void kernelLaucher(int kernelID, float *h_Matrix, int height, int width);
+void kernelLaucherUM(int kernelID, int height, int width);
+float validateSolution(float* h_mat, float* d_mat, int width, int height);
 float checkSum(float* mat, int height, int width);
 
-float *hostInput; // The input 1D vector
+// Does not change once it has been randomised
+float *input_Matrix; 
+
+// Matrix to be solved by the CPU. Does not change once solved
+float *cpu_Matrix;	 
+
+// Pre-UM matrices
 float *h_Matrix;
-float *hostOutput; // The output vector
 float *d_Matrix;
 
-int blocksize = 0;
-int numOfInputElements = 0;
-int numOfOutputElements = 0;
+float *um_Matrix; // Unified Memory matrix 
+
 
 int choice = NULL;
 
 
-
 int main() {
-
-	int kernelID = 3;
-
-	
-
-	printProperties();
-
-	printf("Starting kernel #%d\n", kernelID);
-
-	cudaError_t err = cudaSuccess;
-
-	int *temp;
-	int m = 0;
 
 	// -- Max matrix for kernel 1 = 791x792
 	// -- Max matrix for kernel 2 = 97x98
 	// -- Max matrix for kernel 3 = 211x212
 
-	int height = 200;
-	int width = height + 1;
+	int height = 127;
+	int width = 128;
+	int kernelID = 4;
+	int printInfo = 0;
+
+	int noGUI = 1;
+
+	do{
+
+		//Print instructions
+		printf("\n####################################################\n"
+			"################ -- Menu -- ########################\n"
+			"####################################################\n\n"
+			"1 - KERNEL#1 - Naive implementation\n"
+			"2 - KERNEL#2 - Multiple blocks for elimination kernel\n"
+			"3 - KERNEL#3 - Use of shared memory\n"
+			"4 - KERNEL#4 - Using Unified Memory (CUDA 6.0+)\n"
+			"5 - KERNEL#5 - \n\n"
+			"0 - Quit\n\n"
+			"###################################################\n\n");
+
+		printf("Format: [Matrix width] [KernelID] [Print]\n");
+		//fflush(stdin);
+		//printf("> ");
+		//scanf("%d %d %d", &width, &kernelID, &printInfo);
+
+		height = width - 1;
+
+		//printProperties();
+
+		printf("Starting kernel #%d on a matrix width of %d...\n", kernelID, width);
+
+		// -- Allocate space on the host
+		input_Matrix = (float*)malloc(sizeof(float)* height * width);
+		cpu_Matrix = (float*)malloc(sizeof(float)* height * width);
+		h_Matrix = (float*)malloc(sizeof(float)* height * width);
 
 
-	// -- Allocate space on the host
-	hostInput = (float*)malloc(sizeof(float) * height * width);
-	h_Matrix = (float*)malloc(sizeof(float)* height * width);
-	
+		// -- Generate random floats & print matrix
+		generateRandomMatrix(height, width, input_Matrix);
+		if (printInfo == 1 && width < 33) {
+			printf("This is the input matrix: \n");
+			printMatrix(height, width, input_Matrix);
+		}
 
-	// -- Generate random floats
-	generateRandomMatrix(height, width);
-	memcpy(h_Matrix, hostInput, sizeof(float)* height * width);
+		// -- Copy randomised matrix to other memories to preserve original
+		memcpy(h_Matrix, input_Matrix, sizeof(float)* height * width);
+		memcpy(cpu_Matrix, input_Matrix, sizeof(float)* height * width);
 
-	// -- Print host matrix
-	printf("hostInput:\n");
-	//printMatrix(height, width, hostInput);
+		// -- Start Timer for CPU
+		StopWatchInterface *CPUTime = NULL;
+		sdkCreateTimer(&CPUTime);
+		sdkResetTimer(&CPUTime);
+		sdkStartTimer(&CPUTime);
+
+		// -- Solve & print matrix on the CPU. This does not change once solved.
+		solveOnHost(height, width, cpu_Matrix);
+
+		cudaThreadSynchronize();
+		sdkStopTimer(&CPUTime);
+		printf("Time taken (CPU): %f ms\n\n", sdkGetTimerValue(&CPUTime));
+
+		if (printInfo == 1 && width < 33) {
+			printf("This is the solution from the CPU: \n");
+			printMatrix(height, width, cpu_Matrix);
+		}
+
+		// -- Start Timer
+		StopWatchInterface *GPUTime = NULL;
+		sdkCreateTimer(&GPUTime);
+		sdkResetTimer(&GPUTime);
+		sdkStartTimer(&GPUTime);
+
+		// -- Launch GPU kernel
+		if (kernelID < 4) kernelLaucher(kernelID, h_Matrix, height, width);
+		if (kernelID >= 4) kernelLaucherUM(kernelID, height, width);
+
+		// -- Finish timer
+		cudaThreadSynchronize();
+		sdkStopTimer(&GPUTime);
+
+		if (printInfo == 1 && width < 33) {
+			printf("This is the solution from the GPU using kernel #%d: \n", kernelID);
+			if (kernelID < 4) printMatrix(height, width, h_Matrix);
+			if (kernelID > 3) printMatrix(height, width, um_Matrix);
+		}
+
+		printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
+		printf("CPU checksum: %f\n", checkSum(cpu_Matrix, height, width));
+
+		if (kernelID < 4){
+			printf("Average discrepancy per element: %f\n", validateSolution(cpu_Matrix, h_Matrix, width, height));
+			printf("GPU checksum: %f\n", checkSum(h_Matrix, height, width));
+		}
+		if (kernelID > 3){
+			printf("Average discrepancy per element: %f\n\n", validateSolution(cpu_Matrix, um_Matrix, width, height));
+			printf("GPU checksum: %f\n", checkSum(um_Matrix, height, width));
+		}
+
+		
+		
 
 
-	// -- Start Timer
-	StopWatchInterface *CPUTime = NULL;
-	sdkCreateTimer(&CPUTime);
-	sdkResetTimer(&CPUTime);
-	sdkStartTimer(&CPUTime);
 
-	// -- Solve matrix on the CPU
-	solveOnHost(height, width, hostInput);
-
-	// -- Finish timer
-	cudaThreadSynchronize();
-	sdkStopTimer(&CPUTime);
-
-	// -- Print elapsed time
-	printf("Time taken (CPU): %f ms\n\n", sdkGetTimerValue(&CPUTime));
-
-	// -- Print matrix
-	printf("CPU Identity Matrix:\n");
-	//printMatrix(height, width, hostInput);	
-
-	// -- Start Timer
-	StopWatchInterface *GPUTime = NULL;
-	sdkCreateTimer(&GPUTime);
-	sdkResetTimer(&GPUTime);
-	sdkStartTimer(&GPUTime);
-
-	// -- Launch GPU kernel
-	kernelLaucher(kernelID, h_Matrix, height, width);
-
-	// -- Print matrix
-	printf("GPU Identity Matrix:\n");
-	//printMatrix(height, width, h_Matrix);
-
-	// -- Finish timer
-	cudaThreadSynchronize();
-	sdkStopTimer(&GPUTime);
-
-	// -- Print elapsed time
-	printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
-
-
-	printf("CPU checksum: %f\n", checkSum(hostInput, height, width));
-	printf("GPU checksum: %f\n", checkSum(h_Matrix, height, width));
+	} while (kernelID != 0 && noGUI == 0);
 
 	// -- Free memory
 	cudaFree(d_Matrix);
-
+	cudaFree(um_Matrix);
 	free(h_Matrix);
-
-
-	free(hostInput);
-	free(hostOutput);
+	free(input_Matrix);
+	free(cpu_Matrix);
 
 	return 0;
 }
 
-void writeToFile() {
-
-	printf("Opening text file... ");
-
-	//srand((unsigned int)time(NULL));
-
-	FILE *f = fopen("file.txt", "w+");
-
-	if (f == NULL) {
-		printf("Error opening file!\n");
-		exit(1);
-	}
-
-	/* print integers to text file */
-	int a = 10;
-
-	for (int i = 0; i < numOfInputElements; i++) {
-		int value = rand() % a;
-		fprintf(f, "%d ", value);
-	}
-
-	fclose(f);
-
-	printf("Finished writing random numbers!\n");
-
-}
-
-void generateRandomMatrix(int height, int width) {
+void generateRandomMatrix(int height, int width, float* mat) {
 
 	// Generates a random matrix of floats
 	//srand((unsigned int)time(NULL));
 	for (int i = 0; i < (height * width); i++) {
 		float value = (float)rand() / (float)(RAND_MAX/90);
-		hostInput[i] = value;
+		mat[i] = value;
 	}
-	hostInput[0] = 90.99;
+	mat[0] = 90.99;
 
 }
 
-void solveOnHost(int height, int width, float* hostInput){
+void solveOnHost(int height, int width, float* mat){
 
 	float pivot = 0;
 	
@@ -190,25 +193,29 @@ void solveOnHost(int height, int width, float* hostInput){
 
 		// -- Define pivot position and value
 		int pivotPos = row_ID * (width + 1);
-		pivot = hostInput[pivotPos];
+		pivot = mat[pivotPos];
 
 		// -- Normalise row relative to pivot		
 		for (int col = 0; col < (width - row_ID); col++){
-			hostInput[pivotPos + col] = hostInput[pivotPos + col] / pivot;
+			mat[pivotPos + col] = mat[pivotPos + col] / pivot;
 		}
+
+		
 
 		// -- Loop through j-th column and remove suitable multiples
 		for (int row2_ID = 1; row2_ID < (height - row_ID); row2_ID++){
 
-			float coeff = hostInput[pivotPos + (width * row2_ID)];
+			float coeff = mat[pivotPos + (width * row2_ID)];
 
 			for (int offset_col = 0; offset_col < (width - row_ID); offset_col++){
 
 				// -- Update elements in row by subtracting elements with coeff
-				hostInput[pivotPos + (width * row2_ID) + offset_col] = hostInput[pivotPos + (width * row2_ID) + offset_col]
-					- (coeff * hostInput[pivotPos + offset_col]);
+				mat[pivotPos + (width * row2_ID) + offset_col] = mat[pivotPos + (width * row2_ID) + offset_col]
+					- (coeff * mat[pivotPos + offset_col]);
 			}		
-		}	
+		}
+
+		return;
 	}
 
 	// -- Go through all rows starting from second
@@ -216,18 +223,18 @@ void solveOnHost(int height, int width, float* hostInput){
 
 		// -- Define pivot position and value
 		int pivotPos = row_ID * (width + 1);
-		pivot = hostInput[pivotPos];
+		pivot = mat[pivotPos];
 
 		// -- Loop through j-th column and remove suitable multiples
 		for (int row2_ID = 1; row2_ID < (row_ID + 1); row2_ID++){
 
-			float coeff = hostInput[pivotPos - (width * row2_ID)];
+			float coeff = mat[pivotPos - (width * row2_ID)];
 
 			for (int offset_col = 0; offset_col < (width - row_ID); offset_col++){
 
 				// -- Update elements in row by subtracting elements with coeff
-				hostInput[pivotPos - (width * row2_ID) + offset_col] = hostInput[pivotPos - (width * row2_ID) + offset_col]
-					- (coeff * hostInput[pivotPos + offset_col]);
+				mat[pivotPos - (width * row2_ID) + offset_col] = mat[pivotPos - (width * row2_ID) + offset_col]
+					- (coeff * mat[pivotPos + offset_col]);
 			}
 		}
 	}
@@ -291,7 +298,7 @@ void printProperties() {
 	}
 }
 
-void swapRows(int row1, int row2, int height, int width){
+void swapRows(int row1, int row2, int height, int width, float* mat){
 
 	printf("Swapping rowID #%d with rowID #%d...\n", row1, row2);
 
@@ -311,34 +318,17 @@ void swapRows(int row1, int row2, int height, int width){
 
 		//tempRow[i - (width * row1)] = hostInput[i];
 		// -- Save first row element to buffer memory
-		tempRow[i] = hostInput[startPos_row1 + i];
+		tempRow[i] = cpu_Matrix[startPos_row1 + i];
 		
 		// -- Swap 
-		hostInput[startPos_row1 + i] = hostInput[startPos_row2 + i];
+		cpu_Matrix[startPos_row1 + i] = cpu_Matrix[startPos_row2 + i];
 
-		hostInput[startPos_row2 + i] = tempRow[i];
+		cpu_Matrix[startPos_row2 + i] = tempRow[i];
 	}
 
 	free(tempRow);
-	
-	//int startPos = row1 *
 
-}
 
-int* readFromFile(int* input) {
-
-	printf("Reading text file... \n");
-
-	FILE *f = fopen("file.txt", "r");
-
-	int i;
-
-	for (i = 0; i < numOfInputElements; i++) {
-		fscanf(f, "%d", &input[i]);
-
-	}
-
-	return input;
 }
 
 void handleError() {
@@ -386,6 +376,28 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 
 }
 
+void kernelLaucherUM(int kernelID, int height, int width){
+
+	cudaError_t err = cudaSuccess;
+
+	// -- Allocate managed memory
+	err = cudaMallocManaged(&um_Matrix, height * width * sizeof(float));
+
+	// -- Copy randomised matrix to managed memory
+	memcpy(um_Matrix, h_Matrix, height * width * sizeof(float));
+
+	if (err != cudaSuccess)
+	{
+		fprintf(stderr, "(UM) Failed to allocate device memory (error code %s)!\n", cudaGetErrorString(err));
+		exit(EXIT_FAILURE);
+	}
+
+	// -- Which kernel to run depending on user input
+	if (kernelID == 4)	M4_Controller(d_Matrix, um_Matrix, height, width);
+
+
+}
+
 float checkSum(float* mat, int height, int width){
 
 	float checkSum = 0.0;
@@ -398,4 +410,21 @@ float checkSum(float* mat, int height, int width){
 
 	return checkSum;
 
+}
+
+// -- Finds average absolute difference between both solutions
+float validateSolution(float* h_mat, float* d_mat, int width, int height){
+
+	int startPos = width - 1;
+	float diff = 0;
+	
+	for (int row_ID = 0; row_ID < height; row_ID++){
+
+		diff = diff + abs(h_mat[startPos + (width * row_ID)] - d_mat[startPos + (width * row_ID)]);
+
+	}
+
+	diff = diff / width;
+
+	return diff;
 }

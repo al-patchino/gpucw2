@@ -101,7 +101,7 @@ __global__ void scaleAndSubtract(int pivotPos, int width, float *d_Matrix){
 
 	// -- Update elements in row by subtracting elements with coeff
 	d_Matrix[pivotPos + (width * bid) + tid] = d_Matrix[pivotPos + (width * bid) + tid]
-		- (coeff * d_Matrix[pivotPos + tid]);
+												- (coeff * d_Matrix[pivotPos + tid]);
 }
 
 // -- Eliminate upwards
