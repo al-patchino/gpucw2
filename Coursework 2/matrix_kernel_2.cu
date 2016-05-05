@@ -1,17 +1,16 @@
 #include "matrix_kernel_2.h"
 #include <cuda_runtime.h>
 
-static __global__ void normaliseRow(int pivotPos, float *d_Matrix);
-static __global__ void scaleAndSubtract(int pivotPos, int width, float *d_Matrix);
-static __global__ void scaleAndSubtract2(int pivotPos, int width, float *d_Matrix);
+static __global__ void normaliseRow(int pivotPos, float *d_Matrix, int row_ID, int width);
+static __global__ void scaleAndSubtract(int row_ID, int row2_ID, int pivotPos, int width, float *d_Matrix);
+static __global__ void scaleAndSubtract2(int row_ID, int row2_ID, int pivotPos, int width, float *d_Matrix);
 
-
+#define THREAD_BLOCK 4
+#define CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
 /*
 
 This is the first improvement of the GPU implementation.
 
-	* First scaleAndSubtract loop has been removed. Each block is responsible
-	  for each row.
 	
 	* 1 thread updates one element. Same as before. Matrix limit is bounded by
 	  max number of threads. This needs changing.
@@ -24,36 +23,38 @@ This is the first improvement of the GPU implementation.
 */
 
 // -- Controller function for device function
-// -- Max matrix width = 1024
 void M2_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 
-	// Iterate through all rows
+	// -- Iterate through all rows
 	for (int row_ID = 0; row_ID < height; row_ID++){
 
-		// Each row normalisation has fewer non-zero elements to normalise
-		dim3 blocksPerGrid(1);
-		dim3 threadsPerBlock(width - row_ID);
+		// -- Each row normalisation has fewer non-zero elements to normalise
+		dim3 blocksPerGrid(CEIL((width - row_ID), THREAD_BLOCK));
+		dim3 threadsPerBlock(THREAD_BLOCK);
 
 		// -- Define pivot position and value
 		int pivotPos = row_ID * (width + 1);
 
 		// -- Normalise row
-		//printf("Lauching normaliseRow<<<%d, %d>>>...\n", blocksPerGrid.x, threadsPerBlock.x);
-		normaliseRow << <blocksPerGrid, threadsPerBlock >> >(pivotPos, d_Matrix);
+		normaliseRow << <blocksPerGrid, threadsPerBlock >> >(pivotPos, d_Matrix, row_ID, width);
 
 		// -- Wait for kernel to finish normalising row
 		cudaDeviceSynchronize();
 
-		// -- Each row will have few non-zero elements to remove
-		dim3 rows(height - row_ID);	// Number of rows
-		dim3 elements(width - row_ID);		// Number of elements in row
+		// -- Loop through j-th column and remove suitable multiples
+		for (int row2_ID = 1; row2_ID < (height - row_ID); row2_ID++){
 
-		//-- Call kernel to scale and subtract rows
-		scaleAndSubtract <<< rows, elements >>>(pivotPos, width, d_Matrix);
+			// -- Each row will have few non-zero elements to remove
+			dim3 blocksPerGrid(CEIL((width - row_ID), THREAD_BLOCK));
+			dim3 threadsPerBlock(THREAD_BLOCK);
+
+			//-- Call kernel to scale and subtract rows
+			scaleAndSubtract << < blocksPerGrid, threadsPerBlock >> >(row_ID, row2_ID, pivotPos, width, d_Matrix);
+
+		}
 		
 		// -- Wait for kernel to finish eliminating rows
 		cudaDeviceSynchronize();
-
 	}
 	
 	// -- Go through all rows starting from second
@@ -62,66 +63,70 @@ void M2_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 		// -- Define pivot position and value
 		int pivotPos = row_ID * (width + 1);
 
-		// -- Each row will have few non-zero elements to remove
-		dim3 blocksPerGrid(row_ID + 1);
-		dim3 threadsPerBlock(width - row_ID);
+		// -- Loop through j-th column and remove suitable multiples
+		for (int row2_ID = 1; row2_ID < (row_ID + 1); row2_ID++){
 
-		//-- Call kernel to scale and subtract rows
-		scaleAndSubtract2 <<< blocksPerGrid, threadsPerBlock >>>(pivotPos, width, d_Matrix);
+			// -- Each row will have few non-zero elements to remove
+			dim3 blocksPerGrid(CEIL((width - row_ID), THREAD_BLOCK));
+			dim3 threadsPerBlock(THREAD_BLOCK);
 
-		// -- Wait for kernel to finish eliminating rows
-		cudaDeviceSynchronize();
+			//-- Call kernel to scale and subtract rows
+			scaleAndSubtract2 << < blocksPerGrid, threadsPerBlock >> >(row_ID, row2_ID, pivotPos, width, d_Matrix);
+
+			// -- Wait for kernel to finish eliminating rows
+			cudaDeviceSynchronize();
+
+		}
+
+		return;
 	}
 }
 
 // -- Normalise row relative to pivot value
-__global__ void normaliseRow(int pivotPos, float *d_Matrix){
+__global__ void normaliseRow(int pivotPos, float *d_Matrix, int row_ID, int width){
 
 	// -- Get threadID
-	int tid = threadIdx.x;
+	int g_tid = (blockIdx.x * THREAD_BLOCK) + threadIdx.x;
+
+	// -- If tid tries to access illegal memory then return
+	if (g_tid > (width - row_ID)) return;
 
 	// -- Normalise element relative to pivot value
-	d_Matrix[pivotPos + tid] = d_Matrix[pivotPos + tid] / d_Matrix[pivotPos];
+	d_Matrix[pivotPos + g_tid] = d_Matrix[pivotPos + g_tid] / d_Matrix[pivotPos];
 }
 
 // -- Eliminate downwards
-__global__ void scaleAndSubtract(int pivotPos, int width, float *d_Matrix){
+__global__ void scaleAndSubtract(int row_ID, int row2_ID, int pivotPos, int width, float *d_Matrix){
 
-	// -- Don't overwrite pivot row
-	if (blockIdx.x == 0) return;
-	
-	// -- Get threadID
-	int tid = threadIdx.x;
-	
-	// -- Get blockID
-	int bid = blockIdx.x;
+	// -- Get global threadID
+	int g_tid = (blockIdx.x * THREAD_BLOCK) + threadIdx.x;
+
+	// -- If tid tries to access illegal memory then return
+	if (g_tid > (width - row_ID)) return;
 
 	// -- Find coefficient to scale row with
-	float coeff = d_Matrix[pivotPos + (width * bid)];
+	float coeff = d_Matrix[pivotPos + (width * row2_ID)];
 
 	// -- Update elements in row by subtracting elements with coeff
-	d_Matrix[pivotPos + (width * bid) + tid] = d_Matrix[pivotPos + (width * bid) + tid]
-												- (coeff * d_Matrix[pivotPos + tid]);
+	d_Matrix[pivotPos + (width * row2_ID) + g_tid] = d_Matrix[pivotPos + (width * row2_ID) + g_tid]
+												- (coeff * d_Matrix[pivotPos + g_tid]);
 }
 
 // -- Eliminate upwards
-__global__ void scaleAndSubtract2(int pivotPos, int width, float *d_Matrix){
+__global__ void scaleAndSubtract2(int row_ID, int row2_ID, int pivotPos, int width, float *d_Matrix){
 
-	// -- Don't overwrite pivot row
-	if (blockIdx.x == 0) return;
+	// -- Get global threadID
+	int g_tid = (blockIdx.x * THREAD_BLOCK) + threadIdx.x;
 	
-	// -- Get threadID
-	int tid = threadIdx.x;
-
-	// -- Get blockID
-	int bid = blockIdx.x;
+	// -- If tid tries to access illegal memory then return
+	if (g_tid > (width - row_ID)) return;
 
 	// -- Find coefficient to scale row with
-	float coeff = d_Matrix[pivotPos - (width * bid)];
+	float coeff = d_Matrix[pivotPos - (width * row2_ID)];
 
 	// -- Update elements in row by subtracting elements with coeff
-	d_Matrix[pivotPos - (width * bid) + tid] = d_Matrix[pivotPos - (width * bid) + tid]
-		- (coeff * d_Matrix[pivotPos + tid]);
+	d_Matrix[pivotPos - (width * row2_ID) + g_tid] = d_Matrix[pivotPos - (width * row2_ID) + g_tid]
+		- (coeff * d_Matrix[pivotPos + g_tid]);
 }
 
 

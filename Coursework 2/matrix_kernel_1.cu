@@ -5,16 +5,15 @@ static __global__ void normaliseRow(int pivotPos, float *d_Matrix);
 static __global__ void scaleAndSubtract(int row2_ID, int pivotPos, int width, float *d_Matrix);
 static __global__ void scaleAndSubtract2(int row2_ID, int pivotPos, int width, float *d_Matrix);
 
+/*
+This is the naive implementation of the host algorithm.
+
+	* Since it only uses one block, then it may only do matrices of width < 1024.
+
+*/
 
 // -- Controller function for device function
-// -- Max matrix width = 1024
 void M1_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
-
-	cudaEvent_t start, stop;
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
-
-	cudaEventRecord(start);
 
 	// Iterate through all rows
 	for (int row_ID = 0; row_ID < height; row_ID++){
@@ -43,10 +42,8 @@ void M1_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 			dim3 threadsPerBlock(width - row_ID);
 
 			//-- Call kernel to scale and subtract rows
-			//printf("Lauching scaleAndSubtract<<<%d, %d>>>(%d)...\n", blocksPerGrid.x, threadsPerBlock.x, pivotPos);
 			scaleAndSubtract <<< blocksPerGrid, threadsPerBlock >> >(row2_ID, pivotPos, width, d_Matrix);
-		
-
+	
 		}	
 	}
 
@@ -64,18 +61,11 @@ void M1_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 			dim3 threadsPerBlock(width - row_ID);
 
 			//-- Call kernel to scale and subtract rows
-			//printf("Lauching scaleAndSubtract2<<<%d, %d>>>(%d)...\n", blocksPerGrid.x, threadsPerBlock.x, pivotPos);
 			scaleAndSubtract2 << < blocksPerGrid, threadsPerBlock >> >(row2_ID, pivotPos, width, d_Matrix);
 
-			// -- Print matrix
-			//printMatrix(height, width);
 		}
 	}
 
-	cudaEventSynchronize(stop);
-	float milliseconds = 0;
-	cudaEventElapsedTime(&milliseconds, start, stop);
-	printf("GPU time (cudaEvent): %.6f\n", &milliseconds);
 }
 
 // -- Normalise row relative to pivot value

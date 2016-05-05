@@ -56,14 +56,15 @@ int main() {
 	// -- Max matrix for kernel 2 = 97x98
 	// -- Max matrix for kernel 3 = 211x212
 
-	int height = 127;
-	int width = 128;
-	int kernelID = 4;
-	int printInfo = 0;
+	int kernelID = 0;
 
-	int noGUI = 1;
 
 	do{
+
+		int height;
+		int width;
+
+		int printInfo = 0;
 
 		//Print instructions
 		printf("\n####################################################\n"
@@ -78,89 +79,117 @@ int main() {
 			"###################################################\n\n");
 
 		printf("Format: [Matrix width] [KernelID] [Print]\n");
-		//fflush(stdin);
-		//printf("> ");
-		//scanf("%d %d %d", &width, &kernelID, &printInfo);
+		fflush(stdin);
+		printf("> ");
+		scanf("%d %d %d", &width, &kernelID, &printInfo);
 
-		height = width - 1;
+		
 
 		//printProperties();
 
-		printf("Starting kernel #%d on a matrix width of %d...\n", kernelID, width);
+		//printf("Starting kernel #%d on a matrix width of %d...\n", kernelID, width);
+		//for (int power = 5; power < 13; power++){
 
-		// -- Allocate space on the host
-		input_Matrix = (float*)malloc(sizeof(float)* height * width);
-		cpu_Matrix = (float*)malloc(sizeof(float)* height * width);
-		h_Matrix = (float*)malloc(sizeof(float)* height * width);
+			//width = (int)pow(2.0, power);
+			height = width - 1;
+
+			//for (int i = 0; i < 3; i++){
+
+				// -- Allocate space on the host
+				input_Matrix = (float*)malloc(sizeof(float)* height * width);
+				cpu_Matrix = (float*)malloc(sizeof(float)* height * width);
+				h_Matrix = (float*)malloc(sizeof(float)* height * width);
 
 
-		// -- Generate random floats & print matrix
-		generateRandomMatrix(height, width, input_Matrix);
-		if (printInfo == 1 && width < 33) {
-			printf("This is the input matrix: \n");
-			printMatrix(height, width, input_Matrix);
-		}
+				// -- Generate random floats & print matrix
+				generateRandomMatrix(height, width, input_Matrix);
+				if (printInfo == 1 && width < 17) {
+					printf("This is the input matrix: \n");
+					printMatrix(height, width, input_Matrix);
+				}
 
-		// -- Copy randomised matrix to other memories to preserve original
-		memcpy(h_Matrix, input_Matrix, sizeof(float)* height * width);
-		memcpy(cpu_Matrix, input_Matrix, sizeof(float)* height * width);
+				// -- Copy randomised matrix to other memories to preserve original
+				memcpy(h_Matrix, input_Matrix, sizeof(float)* height * width);
+				memcpy(cpu_Matrix, input_Matrix, sizeof(float)* height * width);
 
-		// -- Start Timer for CPU
-		StopWatchInterface *CPUTime = NULL;
-		sdkCreateTimer(&CPUTime);
-		sdkResetTimer(&CPUTime);
-		sdkStartTimer(&CPUTime);
+				// -- Start Timer for CPU
+				StopWatchInterface *CPUTime = NULL;
+				sdkCreateTimer(&CPUTime);
+				sdkResetTimer(&CPUTime);
+				sdkStartTimer(&CPUTime);
 
-		// -- Solve & print matrix on the CPU. This does not change once solved.
-		solveOnHost(height, width, cpu_Matrix);
+				// -- Solve & print matrix on the CPU. This does not change once solved.
+				solveOnHost(height, width, cpu_Matrix);
 
-		cudaThreadSynchronize();
-		sdkStopTimer(&CPUTime);
-		printf("Time taken (CPU): %f ms\n\n", sdkGetTimerValue(&CPUTime));
+				cudaThreadSynchronize();
+				sdkStopTimer(&CPUTime);
+				
 
-		if (printInfo == 1 && width < 33) {
-			printf("This is the solution from the CPU: \n");
-			printMatrix(height, width, cpu_Matrix);
-		}
+				if (printInfo == 1 && width < 17) {
+					printf("This is the solution from the CPU: \n");
+					printMatrix(height, width, cpu_Matrix);
+				}
 
-		// -- Start Timer
-		StopWatchInterface *GPUTime = NULL;
-		sdkCreateTimer(&GPUTime);
-		sdkResetTimer(&GPUTime);
-		sdkStartTimer(&GPUTime);
+				// -- Start Timer
+				StopWatchInterface *GPUTime = NULL;
+				sdkCreateTimer(&GPUTime);
+				sdkResetTimer(&GPUTime);
+				sdkStartTimer(&GPUTime);
 
-		// -- Launch GPU kernel
-		if (kernelID < 4) kernelLaucher(kernelID, h_Matrix, height, width);
-		if (kernelID >= 4) kernelLaucherUM(kernelID, height, width);
+				// -- Launch GPU kernel
+				if (kernelID < 4) kernelLaucher(kernelID, h_Matrix, height, width);
+				if (kernelID >= 4) kernelLaucherUM(kernelID, height, width);
 
-		// -- Finish timer
-		cudaThreadSynchronize();
-		sdkStopTimer(&GPUTime);
+				// -- Finish timer
+				cudaThreadSynchronize();
+				sdkStopTimer(&GPUTime);
 
-		if (printInfo == 1 && width < 33) {
-			printf("This is the solution from the GPU using kernel #%d: \n", kernelID);
-			if (kernelID < 4) printMatrix(height, width, h_Matrix);
-			if (kernelID > 3) printMatrix(height, width, um_Matrix);
-		}
+				if (printInfo == 1 && width < 17) {
+					printf("This is the solution from the GPU using kernel #%d: \n", kernelID);
+					if (kernelID < 4) printMatrix(height, width, h_Matrix);
+					if (kernelID > 3) printMatrix(height, width, um_Matrix);
+				}
 
-		printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
-		printf("CPU checksum: %f\n", checkSum(cpu_Matrix, height, width));
+				//printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
+				//printf("CPU checksum: %f\n", checkSum(cpu_Matrix, height, width));
 
-		if (kernelID < 4){
-			printf("Average discrepancy per element: %f\n", validateSolution(cpu_Matrix, h_Matrix, width, height));
-			printf("GPU checksum: %f\n", checkSum(h_Matrix, height, width));
-		}
-		if (kernelID > 3){
-			printf("Average discrepancy per element: %f\n\n", validateSolution(cpu_Matrix, um_Matrix, width, height));
-			printf("GPU checksum: %f\n", checkSum(um_Matrix, height, width));
-		}
+				// -- For non-UM kernels
+				if (kernelID < 4){
+					printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n\n",
+						sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, h_Matrix, width, height));
+				}
+
+				// -- For UM kernels
+				if (kernelID > 3){
+					printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n\n",
+						sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, um_Matrix, width, height));
+				}
+
+
+
+				//printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\n", sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height);
+
+
+
+
+				free(h_Matrix);
+				free(input_Matrix);
+				free(cpu_Matrix);
+				cudaFree(d_Matrix);
+				cudaFree(um_Matrix);
+			//}
+		//}
+
+		/*
+
+
 
 		
-		
+		*/
 
 
 
-	} while (kernelID != 0 && noGUI == 0);
+	} while (kernelID != 0);
 
 	// -- Free memory
 	cudaFree(d_Matrix);
@@ -200,8 +229,6 @@ void solveOnHost(int height, int width, float* mat){
 			mat[pivotPos + col] = mat[pivotPos + col] / pivot;
 		}
 
-		
-
 		// -- Loop through j-th column and remove suitable multiples
 		for (int row2_ID = 1; row2_ID < (height - row_ID); row2_ID++){
 
@@ -214,8 +241,6 @@ void solveOnHost(int height, int width, float* mat){
 					- (coeff * mat[pivotPos + offset_col]);
 			}		
 		}
-
-		return;
 	}
 
 	// -- Go through all rows starting from second
@@ -237,6 +262,8 @@ void solveOnHost(int height, int width, float* mat){
 					- (coeff * mat[pivotPos + offset_col]);
 			}
 		}
+
+		return;
 	}
 
 }
