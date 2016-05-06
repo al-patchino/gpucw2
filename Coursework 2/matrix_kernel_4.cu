@@ -2,64 +2,64 @@
 #include <cuda_runtime.h>
 #include <math.h>
 
-static __global__ void normaliseRow(int pivotPos, float *um_Matrix, float pivotVal, int width);
-static __global__ void scaleAndSubtract(int pivotPos, int width, float *um_Matrix);
-static __global__ void scaleAndSubtract2(int pivotPos, int width, float *um_Matrix);
+static __global__ void normaliseRow(int pivotPos, float *d_Matrix, int row_ID, int width);
+static __global__ void scaleAndSubtract(int row_ID, int pivotPos, int width, float *d_Matrix);
+static __global__ void scaleAndSubtract2(int row_ID, int pivotPos, int width, float *d_Matrix);
 
+#define THREAD_BLOCK 4
+#define CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
+#define HANDLE_ERROR( err ) (HandleError( err, __FILE__, __LINE__ ))
 
-#define SEGMENT_LENGTH 128
+static void HandleError(cudaError_t err,
+	const char *file,
+	int line) {
+	if (err != cudaSuccess) {
+		printf("%s in %s at line %d\n", cudaGetErrorString(err),
+			file, line);
+		exit(EXIT_FAILURE);
+	}
+}
+
 
 /*
 
-This is the second improvement of the GPU implementation.
+This is the fourth improvement of the GPU implementation.
 
-	*	Trying out Unified Memory (had to re-compile for 64 bit architecture instead)
-	
-	*	This means I can pass coeff & pivotVal by value to reduce reads to GM since memory
-		is visible to both device and host
-	
-	*	Shared Memory usage removed from normaliseRow since pivotVal is being passed in function.
-		In this case, shared memory would offer no advantage, since its 1 GM read and 1 GM load.
-
-	*	Added checks to prevent threads accessing illegal memory
+	* Multidimensional blocks helps us get rid of the unecessary loops
 
 */
 
 // -- Controller function for device function
-// -- Max matrix width = 1024
-void M4_Controller(float* d_Matrix, float* um_Matrix, int height, int width){
+void M4_Controller(float* d_Matrix, float* h_Matrix, int height, int width){
 
 	// -- Iterate through all rows
 	for (int row_ID = 0; row_ID < height; row_ID++){
 
-		// Each row normalisation has fewer non-zero elements to normalise
-		dim3 blocksPerGrid(1);
-		dim3 threadsPerBlock(width - row_ID);
+		// -- Each row normalisation has fewer non-zero elements to normalise
+		dim3 blocksPerGrid(CEIL((width - row_ID), THREAD_BLOCK));
+		dim3 threadsPerBlock(THREAD_BLOCK);
 
+		// -- Define pivot position and value
 		int pivotPos = row_ID * (width + 1);
 
 		// -- Normalise row
-		normaliseRow << <blocksPerGrid, threadsPerBlock>> >(pivotPos, um_Matrix, um_Matrix[pivotPos], width);
-		
-		// -- Wait for kernel to finish normalising row
-		cudaDeviceSynchronize();
+		normaliseRow << <blocksPerGrid, threadsPerBlock >> >(pivotPos, d_Matrix, row_ID, width);
 
+		HANDLE_ERROR(cudaThreadSynchronize());
+
+		
 
 		// -- Each row will have few non-zero elements to remove
-		dim3 rows(height - row_ID);			// Number of rows
-		dim3 elements(width - row_ID);		// Number of elements in row
+		int rowsLeft = height - row_ID;
+		dim3 blocks(CEIL((width - row_ID), THREAD_BLOCK), rowsLeft, 1);
+		dim3 threads(THREAD_BLOCK, 1);
 
-		// -- If pivot is on last row then there's nothing else to eliminate
-		//if (rows.x == 1) return;
+		scaleAndSubtract <<< blocks, threads>> >(row_ID, pivotPos, width, d_Matrix);
 
-		// -- Call kernel to scale and subtract rows
-		scaleAndSubtract << < rows, elements >> >(pivotPos, width, um_Matrix);
+		HANDLE_ERROR(cudaThreadSynchronize());
 
-		// -- Wait for kernel to finish eliminating rows
-		cudaDeviceSynchronize();
-
-		return;
 	}
+
 
 	// -- Go through all rows starting from second
 	for (int row_ID = 1; row_ID < height; row_ID++){
@@ -68,84 +68,115 @@ void M4_Controller(float* d_Matrix, float* um_Matrix, int height, int width){
 		int pivotPos = row_ID * (width + 1);
 
 		// -- Each row will have few non-zero elements to remove
-		dim3 blocksPerGrid(row_ID + 1);
-		dim3 threadsPerBlock(width - row_ID);
+		int rowsLeft = row_ID;
+		dim3 blocks(CEIL((width - row_ID), THREAD_BLOCK), rowsLeft, 1);
+		dim3 threads(THREAD_BLOCK, 1);
 
-		//-- Call kernel to scale and subtract rows
-		scaleAndSubtract2 << < blocksPerGrid, threadsPerBlock, sizeof(float)* threadsPerBlock.x >> >(pivotPos, width, um_Matrix);
+		scaleAndSubtract2<< < blocks, threads >> >(row_ID, pivotPos, width, d_Matrix);
 
-		// -- Wait for kernel to finish eliminating rows
-		cudaDeviceSynchronize();
+		HANDLE_ERROR(cudaThreadSynchronize());
+
+		return;
 	}
 }
 
 // -- Normalise row relative to pivot value
-__global__ void normaliseRow(int pivotPos, float *um_Matrix, float pivotVal, int width){
+__global__ void normaliseRow(int pivotPos, float *d_Matrix, int row_ID, int width){
 
-	// -- Get global threadID
-	int g_tid = (blockIdx.x * SEGMENT_LENGTH) + threadIdx.x;
+	// -- Get threadID
+	int tid = threadIdx.x;
+	int g_tid = (blockIdx.x * THREAD_BLOCK) + tid;
 
-	// -- Kill threads that will access memory outside of their row
-	if ((g_tid + pivotPos) > (width - 1)) return;
+	// -- Declare shared memory dynamically
+	__shared__ float sh_Row[THREAD_BLOCK];
+	__shared__ float sh_Pivot;
 
-	// -- Normalise element relative to pivot value
-	um_Matrix[pivotPos + g_tid] = um_Matrix[pivotPos + g_tid] / pivotVal;
+	// -- Use first thread to load pivot in shared variable
+	if (tid == 0) sh_Pivot = d_Matrix[pivotPos];
+
+	// -- Use other threads to load elements into shared block
+	sh_Row[tid] = d_Matrix[pivotPos + g_tid];
+
+	// -- Make sure all threads have loaded to shared memory
+	__syncthreads();
+
+	// -- Normalise row element relative to pivot
+	sh_Row[tid] = sh_Row[tid] / sh_Pivot;
+
+	// -- To guard against the next case, but not sure if completely needed **************************************************
+	__syncthreads();
+
+	d_Matrix[pivotPos + g_tid] = sh_Row[tid];
+
+	// -- To guard against the next case, but not sure if completely needed **************************************************
+	__syncthreads();
 }
 
 // -- Normalise row relative to pivot value downwards
-__global__ void scaleAndSubtract(int pivotPos, int width, float *d_Matrix){
+__global__ void scaleAndSubtract(int row_ID, int pivotPos, int width, float *d_Matrix){
 
 	// -- Get threadID
 	int tid = threadIdx.x;
-
-	// -- Get blockID
+	int g_tid_x = (blockIdx.x * THREAD_BLOCK) + tid;
 	int bid = blockIdx.x;
+	int row = blockIdx.y;
 
 	// -- Declare shared memory dynamically
-	extern __shared__ float s_pivotRow[];
+	__shared__ float sh_pivotRow[THREAD_BLOCK];
+	__shared__ float sh_Coeff;
+	__shared__ float sh_resultRow[THREAD_BLOCK];
+
+	// -- Use first thread to load pivot in shared variable
+	if (tid == 0) sh_Coeff = d_Matrix[pivotPos + (width * row)];
 
 	// -- Move from global to shared memory
-	s_pivotRow[tid] = d_Matrix[pivotPos + tid];
+	sh_pivotRow[tid] = d_Matrix[pivotPos + g_tid_x];
+	sh_resultRow[tid] = d_Matrix[pivotPos + (width * row) + g_tid_x];
 
 	// -- Make sure all threads have loaded to shared memory.
 	__syncthreads();
 
-	// -- Discard bid 0 threads so it doesnt overwrite pivotRow
-	if (bid == 0) return;
-
-	// -- Find coefficient to scale row with
-	float coeff = d_Matrix[pivotPos + (width * bid)];
+	// -- Don't overwrite pivot row
+	if (row == 0) return;
 
 	// -- Update elements in row by subtracting elements with coeff
-	d_Matrix[pivotPos + (width * bid) + tid] = d_Matrix[pivotPos + (width * bid) + tid]
-		- (coeff * s_pivotRow[tid]);
+	d_Matrix[pivotPos + (width * row) + g_tid_x] = sh_resultRow[tid]
+		- (sh_Coeff * sh_pivotRow[tid]);
+
+	__syncthreads();
 }
 
 // -- Normalise row relative to pivot value upwards
-__global__ void scaleAndSubtract2(int pivotPos, int width, float *um_Matrix){
-
-	// -- Don't overwrite pivot row
-	if (blockIdx.x == 0) return;
-
-	// -- Get blockID
-	int bid = blockIdx.x;
+__global__ void scaleAndSubtract2(int row_ID, int pivotPos, int width, float *d_Matrix){
 
 	// -- Get threadID
 	int tid = threadIdx.x;
+	int g_tid_x = (blockIdx.x * THREAD_BLOCK) + tid;
+	int bid = blockIdx.x;
+	int row = blockIdx.y;
 
 	// -- Declare shared memory dynamically
-	extern __shared__ float s_pivotRow[];
+	__shared__ float sh_pivotRow[THREAD_BLOCK];
+	__shared__ float sh_Coeff;
+	__shared__ float sh_resultRow[THREAD_BLOCK];
+
+	// -- Use first thread to load pivot in shared variable
+	if (tid == 0) sh_Coeff = d_Matrix[pivotPos + (width * row)];
 
 	// -- Move from global to shared memory
-	s_pivotRow[tid] = um_Matrix[pivotPos + tid];
+	sh_pivotRow[tid] = d_Matrix[pivotPos + g_tid_x];
+	sh_resultRow[tid] = d_Matrix[pivotPos - (width * row) + g_tid_x];
 
 	// -- Make sure all threads have loaded to shared memory.
 	__syncthreads();
 
-	// -- Find coefficient to scale row with
-	float coeff = um_Matrix[pivotPos - (width * bid)];
+	// -- Don't overwrite pivot row
+	if (row == 0) return;
 
 	// -- Update elements in row by subtracting elements with coeff
-	um_Matrix[pivotPos - (width * bid) + tid] = um_Matrix[pivotPos - (width * bid) + tid]
-		- (coeff * s_pivotRow[tid]);
+	d_Matrix[pivotPos - (width * row) + g_tid_x] = sh_resultRow[tid]
+		- (sh_Coeff * sh_pivotRow[tid]);
+
+	__syncthreads();
+
 }

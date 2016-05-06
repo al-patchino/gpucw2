@@ -26,6 +26,8 @@
 void printProperties();
 void generateRandomMatrix(int height, int width, float* mat);
 void printMatrix(int height, int width, float* mat);
+void writeToFile(int height, int width, float* mat, float* mat2);
+void writeOutputToFile(int height, int width, float* mat, float* mat2);
 void swapRows(int row1, int row2, int height, int width);
 void solveOnHost(int height, int width, float* mat);
 void handleError();
@@ -56,7 +58,7 @@ int main() {
 	// -- Max matrix for kernel 2 = 97x98
 	// -- Max matrix for kernel 3 = 211x212
 
-	int kernelID = 0;
+	int kernelID = 3;
 
 
 	do{
@@ -66,15 +68,15 @@ int main() {
 
 		int printInfo = 0;
 
-		//Print instructions
+	/*	//Print instructions
 		printf("\n####################################################\n"
 			"################ -- Menu -- ########################\n"
 			"####################################################\n\n"
 			"1 - KERNEL#1 - Naive implementation\n"
-			"2 - KERNEL#2 - Multiple blocks for elimination kernel\n"
-			"3 - KERNEL#3 - Use of shared memory\n"
-			"4 - KERNEL#4 - Using Unified Memory (CUDA 6.0+)\n"
-			"5 - KERNEL#5 - \n\n"
+			"2 - KERNEL#2 - Multiple blocks & shared variable\n"
+			"3 - KERNEL#3 - Use of shared memory and tiles\n"
+			"4 - KERNEL#4 - \n"
+			"5 - KERNEL#5 - Using Unified Memory (CUDA 6.0+)\n\n"
 			"0 - Quit\n\n"
 			"###################################################\n\n");
 
@@ -83,17 +85,17 @@ int main() {
 		printf("> ");
 		scanf("%d %d %d", &width, &kernelID, &printInfo);
 
-		
+		*/
 
 		//printProperties();
 
 		//printf("Starting kernel #%d on a matrix width of %d...\n", kernelID, width);
-		//for (int power = 5; power < 13; power++){
+		for (int power = 5; power < 13; power++){  //// Benchmark
 
-			//width = (int)pow(2.0, power);
+			width = (int)pow(2.0, power);			//// benchmark
 			height = width - 1;
 
-			//for (int i = 0; i < 3; i++){
+			for (int i = 0; i < 3; i++){           ///// benchmark
 
 				// -- Allocate space on the host
 				input_Matrix = (float*)malloc(sizeof(float)* height * width);
@@ -103,7 +105,7 @@ int main() {
 
 				// -- Generate random floats & print matrix
 				generateRandomMatrix(height, width, input_Matrix);
-				if (printInfo == 1 && width < 17) {
+				if (printInfo == 1 && width < 33) {
 					printf("This is the input matrix: \n");
 					printMatrix(height, width, input_Matrix);
 				}
@@ -125,7 +127,7 @@ int main() {
 				sdkStopTimer(&CPUTime);
 				
 
-				if (printInfo == 1 && width < 17) {
+				if (printInfo == 1 && width < 33) {
 					printf("This is the solution from the CPU: \n");
 					printMatrix(height, width, cpu_Matrix);
 				}
@@ -137,32 +139,32 @@ int main() {
 				sdkStartTimer(&GPUTime);
 
 				// -- Launch GPU kernel
-				if (kernelID < 4) kernelLaucher(kernelID, h_Matrix, height, width);
-				if (kernelID >= 4) kernelLaucherUM(kernelID, height, width);
+				if (kernelID < 5) kernelLaucher(kernelID, h_Matrix, height, width);
+				if (kernelID >= 5) kernelLaucherUM(kernelID, height, width);
 
 				// -- Finish timer
 				cudaThreadSynchronize();
 				sdkStopTimer(&GPUTime);
 
-				if (printInfo == 1 && width < 17) {
+				if (printInfo == 1 && width < 33) {
 					printf("This is the solution from the GPU using kernel #%d: \n", kernelID);
-					if (kernelID < 4) printMatrix(height, width, h_Matrix);
-					if (kernelID > 3) printMatrix(height, width, um_Matrix);
+					if (kernelID < 5) printMatrix(height, width, h_Matrix);
+					if (kernelID > 4) printMatrix(height, width, um_Matrix);
 				}
 
 				//printf("Time taken (GPU): %f ms\n\n", sdkGetTimerValue(&GPUTime));
 				//printf("CPU checksum: %f\n", checkSum(cpu_Matrix, height, width));
 
 				// -- For non-UM kernels
-				if (kernelID < 4){
-					printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n\n",
-						sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, h_Matrix, width, height));
+				if (kernelID < 5){
+					printf("Kernel #%d: Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n",
+						kernelID, sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, h_Matrix, width, height));
 				}
 
 				// -- For UM kernels
-				if (kernelID > 3){
-					printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n\n",
-						sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, um_Matrix, width, height));
+				if (kernelID > 4){
+					//printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\nMean error: %f\n\n",
+						//sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height, validateSolution(cpu_Matrix, um_Matrix, width, height));
 				}
 
 
@@ -170,15 +172,18 @@ int main() {
 				//printf("Time taken (CPU): %f ms, GPU: %f ms. \nWidth: %d, Height: %d\n", sdkGetTimerValue(&CPUTime), sdkGetTimerValue(&GPUTime), width, height);
 
 
-
+				//writeToFile(height, width, cpu_Matrix, h_Matrix);
+				//writeOutputToFile(height, width, cpu_Matrix, h_Matrix);
 
 				free(h_Matrix);
 				free(input_Matrix);
 				free(cpu_Matrix);
-				cudaFree(d_Matrix);
-				cudaFree(um_Matrix);
-			//}
-		//}
+				HANDLE_ERROR(cudaFree(d_Matrix));
+				HANDLE_ERROR(cudaFree(um_Matrix));
+			}
+
+			printf("\n");
+		}
 
 		/*
 
@@ -192,8 +197,8 @@ int main() {
 	} while (kernelID != 0);
 
 	// -- Free memory
-	cudaFree(d_Matrix);
-	cudaFree(um_Matrix);
+	HANDLE_ERROR(cudaFree(d_Matrix));
+	HANDLE_ERROR(cudaFree(um_Matrix));
 	free(h_Matrix);
 	free(input_Matrix);
 	free(cpu_Matrix);
@@ -206,10 +211,61 @@ void generateRandomMatrix(int height, int width, float* mat) {
 	// Generates a random matrix of floats
 	//srand((unsigned int)time(NULL));
 	for (int i = 0; i < (height * width); i++) {
-		float value = (float)rand() / (float)(RAND_MAX/90);
-		mat[i] = value;
+		//float value = (float)rand() / (float)(RAND_MAX/90);
+		float value = (rand() % 100) + 20;
+		mat[i] = (float)value;
 	}
-	mat[0] = 90.99;
+	mat[0] = 90.00;
+
+}
+
+void writeToFile(int height, int width, float* mat, float* mat2){
+
+	FILE *fp;
+	char output[] = "output.txt";
+	int n;
+	fp = fopen(output, "w");
+
+	for (int row = 0; row < height; row++){
+		for (int col = 0; col < width; col++){
+
+			fprintf(fp, "[%.4f] ", mat[(row * width) + col]);
+		}
+		fprintf(fp, "\n");
+	}
+	fprintf(fp, "\n\n");
+
+	for (int row = 0; row < height; row++){
+		for (int col = 0; col < width; col++){
+
+			fprintf(fp, "[%.4f] ", mat2[(row * width) + col]);
+		}
+		fprintf(fp, "\n");
+	}
+	fprintf(fp, "\n\n");
+
+
+	fclose(fp);
+
+}
+
+void writeOutputToFile(int height, int width, float* mat, float* mat2){
+
+	FILE *fp;
+	char output[] = "output2.txt";
+	int n;
+	fp = fopen(output, "w");
+
+	int startPos = width - 1;
+
+	for (int row_ID = 0; row_ID < height; row_ID++){
+
+		fprintf(fp, "[%f] ", mat[startPos + (width * row_ID)]);
+		fprintf(fp, "[%f]\n", mat2[startPos + (width * row_ID)]);
+
+	}
+
+	fclose(fp);
 
 }
 
@@ -229,6 +285,9 @@ void solveOnHost(int height, int width, float* mat){
 			mat[pivotPos + col] = mat[pivotPos + col] / pivot;
 		}
 
+		
+
+		
 		// -- Loop through j-th column and remove suitable multiples
 		for (int row2_ID = 1; row2_ID < (height - row_ID); row2_ID++){
 
@@ -241,7 +300,11 @@ void solveOnHost(int height, int width, float* mat){
 					- (coeff * mat[pivotPos + offset_col]);
 			}		
 		}
+
+
 	}
+
+
 
 	// -- Go through all rows starting from second
 	for (int row_ID = 1; row_ID < height; row_ID++){
@@ -263,7 +326,6 @@ void solveOnHost(int height, int width, float* mat){
 			}
 		}
 
-		return;
 	}
 
 }
@@ -276,7 +338,7 @@ void printMatrix(int height, int width, float* mat) {
 
 		for (int k = 0; k < width; ++k){
 
-			printf("[%.2f] ", mat[i * width + k]);
+			printf("[%f] ", mat[i * width + k]);
 		}
 		printf("\n");
 	}
@@ -370,6 +432,12 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 	cudaError_t err = cudaSuccess;
 
 	// -- Allocate device memory
+	HANDLE_ERROR(cudaMalloc((void**)&d_Matrix, sizeof(float)* height * width));
+	// -- Copy host matrix to device matrix
+	HANDLE_ERROR(cudaMemcpy(d_Matrix, h_Matrix, height * width * sizeof(float), cudaMemcpyHostToDevice));
+	
+	/*
+	// -- Allocate device memory
 	err = cudaMalloc((void**)&d_Matrix, sizeof(float)* height * width);
 	if (err != cudaSuccess)
 	{
@@ -383,7 +451,7 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 	{
 		fprintf(stderr, "Failed to copy host matrix to device matrix (error code %s)!\n", cudaGetErrorString(err));
 		exit(EXIT_FAILURE);
-	}
+	}*/
 
 	// -- Which kernel to run depending on user input
 	if (kernelID == 1)	M1_Controller(d_Matrix, h_Matrix, height, width);
@@ -391,7 +459,9 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 	if (kernelID == 3)	M3_Controller(d_Matrix, h_Matrix, height, width);
 	if (kernelID == 4)	M4_Controller(d_Matrix, h_Matrix, height, width);
 	
-
+	// -- Copy device matrix to host matrix
+	HANDLE_ERROR(cudaMemcpy(h_Matrix, d_Matrix, height * width * sizeof(float), cudaMemcpyDeviceToHost));
+	/*
 	// -- Copy device matrix to host matrix
 	err = cudaMemcpy(h_Matrix, d_Matrix, height * width * sizeof(float), cudaMemcpyDeviceToHost);
 
@@ -399,7 +469,7 @@ void kernelLaucher(int kernelID, float *h_Matrix, int height, int width){
 	{
 		fprintf(stderr, "Failed to copy from device to host (error code %s)!\n", cudaGetErrorString(err));
 		exit(EXIT_FAILURE);
-	}
+	}*/
 
 }
 
@@ -420,7 +490,7 @@ void kernelLaucherUM(int kernelID, int height, int width){
 	}
 
 	// -- Which kernel to run depending on user input
-	if (kernelID == 4)	M4_Controller(d_Matrix, um_Matrix, height, width);
+	if (kernelID == 5)	M4_Controller(d_Matrix, um_Matrix, height, width);
 
 
 }
